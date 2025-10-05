@@ -6,93 +6,110 @@ using TrilhaNetAzureDesafio.Models;
 namespace TrilhaNetAzureDesafio.Controllers;
 
 [ApiController]
-[Route("[controller]")]
+[Route("api/[controller]")]
 public class FuncionarioController : ControllerBase
 {
-    private readonly RHContext _context;
-    private readonly string _connectionString;
+    private readonly RHContext _dbContext;
+    private readonly string _azureConnection;
     private readonly string _tableName;
 
-    public FuncionarioController(RHContext context, IConfiguration configuration)
+    public FuncionarioController(RHContext dbContext, IConfiguration config)
     {
-        _context = context;
-        _connectionString = configuration.GetValue<string>("ConnectionStrings:SAConnectionString");
-        _tableName = configuration.GetValue<string>("ConnectionStrings:AzureTableName");
+        _dbContext = dbContext;
+        _azureConnection = config["ConnectionStrings:SAConnectionString"];
+        _tableName = config["ConnectionStrings:AzureTableName"];
     }
 
-    private TableClient GetTableClient()
+    private TableClient ObterClienteTabela()
     {
-        var serviceClient = new TableServiceClient(_connectionString);
-        var tableClient = serviceClient.GetTableClient(_tableName);
-
-        tableClient.CreateIfNotExists();
-        return tableClient;
+        var serviceClient = new TableServiceClient(_azureConnection);
+        var client = serviceClient.GetTableClient(_tableName);
+        client.CreateIfNotExists();
+        return client;
     }
 
     [HttpGet("{id}")]
-    public IActionResult ObterPorId(int id)
+    public IActionResult BuscarPorId(int id)
     {
-        var funcionario = _context.Funcionarios.Find(id);
+        var func = _dbContext.Funcionarios.Find(id);
+        if (func == null)
+            return NotFound(new { Mensagem = "Funcionário não encontrado." });
 
-        if (funcionario == null)
-            return NotFound();
-
-        return Ok(funcionario);
+        return Ok(func);
     }
 
     [HttpPost]
-    public IActionResult Criar(Funcionario funcionario)
+    public IActionResult Adicionar(Funcionario funcionario)
     {
-        _context.Funcionarios.Add(funcionario);
-        // TODO: Chamar o método SaveChanges do _context para salvar no Banco SQL
+        if (funcionario == null)
+            return BadRequest();
 
-        var tableClient = GetTableClient();
-        var funcionarioLog = new FuncionarioLog(funcionario, TipoAcao.Inclusao, funcionario.Departamento, Guid.NewGuid().ToString());
+        _dbContext.Funcionarios.Add(funcionario);
+        _dbContext.SaveChanges();
 
-        // TODO: Chamar o método UpsertEntity para salvar no Azure Table
+        var tabela = ObterClienteTabela();
+        var log = new FuncionarioLog(
+            funcionario, 
+            TipoAcao.Inclusao, 
+            funcionario.Departamento, 
+            Guid.NewGuid().ToString()
+        );
 
-        return CreatedAtAction(nameof(ObterPorId), new { id = funcionario.Id }, funcionario);
+        tabela.UpsertEntity(log);
+
+        return CreatedAtAction(nameof(BuscarPorId), new { id = funcionario.Id }, funcionario);
     }
 
     [HttpPut("{id}")]
-    public IActionResult Atualizar(int id, Funcionario funcionario)
+    public IActionResult Modificar(int id, Funcionario funcionarioAtualizado)
     {
-        var funcionarioBanco = _context.Funcionarios.Find(id);
+        var funcExistente = _dbContext.Funcionarios.Find(id);
+        if (funcExistente == null)
+            return NotFound(new { Mensagem = "Funcionário não encontrado." });
 
-        if (funcionarioBanco == null)
-            return NotFound();
+        funcExistente.Nome = funcionarioAtualizado.Nome;
+        funcExistente.DataAdmissao = funcionarioAtualizado.DataAdmissao;
+        funcExistente.Salario = funcionarioAtualizado.Salario;
+        funcExistente.Departamento = funcionarioAtualizado.Departamento;
+        funcExistente.Ramal = funcionarioAtualizado.Ramal;
 
-        funcionarioBanco.Nome = funcionario.Nome;
-        funcionarioBanco.Endereco = funcionario.Endereco;
-        // TODO: As propriedades estão incompletas
+        _dbContext.Entry(funcExistente).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+        _dbContext.SaveChanges();
 
-        // TODO: Chamar o método de Update do _context.Funcionarios para salvar no Banco SQL
-        _context.SaveChanges();
+        var tabela = ObterClienteTabela();
+        var log = new FuncionarioLog(
+            funcExistente,
+            TipoAcao.Atualizacao,
+            funcExistente.Departamento,
+            Guid.NewGuid().ToString()
+        );
 
-        var tableClient = GetTableClient();
-        var funcionarioLog = new FuncionarioLog(funcionarioBanco, TipoAcao.Atualizacao, funcionarioBanco.Departamento, Guid.NewGuid().ToString());
+        tabela.UpsertEntity(log);
 
-        // TODO: Chamar o método UpsertEntity para salvar no Azure Table
-
-        return Ok();
+        return Ok(funcExistente);
     }
 
     [HttpDelete("{id}")]
-    public IActionResult Deletar(int id)
+    public IActionResult Remover(int id)
     {
-        var funcionarioBanco = _context.Funcionarios.Find(id);
+        var func = _dbContext.Funcionarios.Find(id);
+        if (func == null)
+            return NotFound(new { Mensagem = "Funcionário não encontrado." });
 
-        if (funcionarioBanco == null)
-            return NotFound();
+        _dbContext.Funcionarios.Remove(func);
+        _dbContext.SaveChanges();
 
-        // TODO: Chamar o método de Remove do _context.Funcionarios para salvar no Banco SQL
-        _context.SaveChanges();
+        var tabela = ObterClienteTabela();
+        var log = new FuncionarioLog(
+            func,
+            TipoAcao.Remocao,
+            func.Departamento,
+            Guid.NewGuid().ToString()
+        );
 
-        var tableClient = GetTableClient();
-        var funcionarioLog = new FuncionarioLog(funcionarioBanco, TipoAcao.Remocao, funcionarioBanco.Departamento, Guid.NewGuid().ToString());
-
-        // TODO: Chamar o método UpsertEntity para salvar no Azure Table
+        tabela.UpsertEntity(log);
 
         return NoContent();
     }
 }
+    
